@@ -1,0 +1,91 @@
+name: Compile ruleset
+on:
+  push:
+  schedule:
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+  
+permissions:
+  contents: write
+  actions: write
+
+env:
+  SING_BOX_VERSION: 1.12.22
+
+jobs:
+  sync_and_compile:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@v4
+      
+    - name: Install sing-box
+      run: |
+        set -Eeuo pipefail
+        curl -Lo sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz
+        tar -xzf sing-box.tar.gz
+        chmod +x sing-box-${SING_BOX_VERSION}-linux-amd64/sing-box
+        sudo mv sing-box-${SING_BOX_VERSION}-linux-amd64/sing-box /usr/local/bin/sing-box
+        rm -rf sing-box sing-box-${SING_BOX_VERSION}-linux-amd64 sing-box.tar.gz
+        
+    - name: Fetch and compile sing-box rules from ruleset
+      run: |
+        set -Eeuo pipefail
+        git remote add ruleset https://github.com/SukkaLab/ruleset.skk.moe.git
+        git fetch ruleset
+        git checkout ruleset/master -- sing-box
+        rm -rf domainset ip non_ip
+        mv sing-box/* ./
+
+        find non_ip -type f -name "my_*.json" -exec rm -f {} \;
+        find . -type f -name "*.json" -exec bash -c '
+          jq "
+            walk(
+              if type == \"array\" then 
+                map(select(
+                  type != \"string\" or (test(\"ruleset\\\\.skk\\\\.moe\") | not)
+                ))
+              else 
+                . 
+              end
+            ) | 
+            walk(
+              if type == \"object\" then 
+                with_entries(select(.value != [] and .value != null))
+              else 
+                . 
+              end
+            )
+          " "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+        ' _ {} \;
+
+        find . -type f -name "*.json" -exec bash -c '
+        echo "Compiling: $1"
+        if ! sing-box rule-set compile "$1"; then
+          echo "Error compiling $1"
+          exit 1
+        fi
+        ' _ {} \;
+
+    - name: Commit and push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -Eeuo pipefail
+        rm -rf .git
+        git config --global init.defaultBranch main
+        git init
+        git config user.name 'github-actions[bot]'
+        git config user.email 'github-actions[bot]@users.noreply.github.com'
+        git add .
+        git commit --allow-empty-message --no-edit
+        git remote add origin https://github-action:$GITHUB_TOKEN@github.com/${{ github.repository }}.git
+        git push origin main --force
+    
+    - name: Delete old workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        repository: ${{ github.repository }}
+        retain_days: 3
+        keep_minimum_runs: 1
