@@ -1,91 +1,282 @@
 name: Compile ruleset
+
 on:
   push:
+    branches:
+      - main
   schedule:
-    - cron: '0 19 * * *'
+    - cron: "0 19 * * *"
   workflow_dispatch:
-  
+
 permissions:
   contents: write
   actions: write
 
+concurrency:
+  group: compile-ruleset
+  cancel-in-progress: false
+
 env:
-  SING_BOX_VERSION: 1.12.25
+  SING_BOX_VERSION: "1.12.25"
 
 jobs:
-  sync_and_compile:
+  sync-and-compile:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout the repository
-      uses: actions/checkout@v6
-      
-    - name: Install sing-box
-      run: |
-        set -Eeuo pipefail
-        curl -Lo sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz
-        tar -xzf sing-box.tar.gz
-        chmod +x sing-box-${SING_BOX_VERSION}-linux-amd64/sing-box
-        sudo mv sing-box-${SING_BOX_VERSION}-linux-amd64/sing-box /usr/local/bin/sing-box
-        rm -rf sing-box sing-box-${SING_BOX_VERSION}-linux-amd64 sing-box.tar.gz
-        
-    - name: Fetch and compile sing-box rules from ruleset
-      run: |
-        set -Eeuo pipefail
-        git remote add ruleset https://github.com/SukkaLab/ruleset.skk.moe.git
-        git fetch ruleset
-        git checkout ruleset/master -- sing-box
-        rm -rf domainset ip non_ip
-        mv sing-box/* ./
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: main
 
-        find non_ip -type f -name "my_*.json" -exec rm -f {} \;
-        find . -type f -name "*.json" -exec bash -c '
-          jq "
-            walk(
-              if type == \"array\" then 
-                map(select(
-                  type != \"string\" or (test(\"ruleset\\\\.skk\\\\.moe\") | not)
-                ))
-              else 
-                . 
-              end
-            ) | 
-            walk(
-              if type == \"object\" then 
-                with_entries(select(.value != [] and .value != null))
-              else 
-                . 
-              end
-            )
-          " "$1" > "$1.tmp" && mv "$1.tmp" "$1"
-        ' _ {} \;
+      - name: Checkout upstream rules
+        uses: actions/checkout@v6
+        with:
+          repository: SukkaLab/ruleset.skk.moe
+          ref: master
+          path: .upstream
+          sparse-checkout: sing-box
+          persist-credentials: false
 
-        find . -type f -name "*.json" -exec bash -c '
-        echo "Compiling: $1"
-        if ! sing-box rule-set compile "$1"; then
-          echo "Error compiling $1"
-          exit 1
-        fi
-        ' _ {} \;
+      - name: Install sing-box
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
-    - name: Commit and push
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        set -Eeuo pipefail
-        rm -rf .git
-        git config --global init.defaultBranch main
-        git init
-        git config user.name 'github-actions[bot]'
-        git config user.email 'github-actions[bot]@users.noreply.github.com'
-        git add .
-        git commit --allow-empty-message --no-edit
-        git remote add origin https://github-action:$GITHUB_TOKEN@github.com/${{ github.repository }}.git
-        git push origin main --force
-    
-    - name: Delete old workflow runs
-      uses: Mattraks/delete-workflow-runs@v2
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        repository: ${{ github.repository }}
-        retain_days: 3
-        keep_minimum_runs: 1
+          archive="sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"
+          install_dir="${RUNNER_TEMP}/sing-box-${SING_BOX_VERSION}-linux-amd64"
+
+          curl -fsSLo "${RUNNER_TEMP}/${archive}" \
+            "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/${archive}"
+
+          tar -xzf "${RUNNER_TEMP}/${archive}" \
+            -C "${RUNNER_TEMP}"
+
+          "${install_dir}/sing-box" version
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+
+      - name: Sync and exclude unwanted rules
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test -d .upstream/sing-box
+
+          # Remove the previous build output to prevent stale JSON and SRS files.
+          rm -rf domainset ip non_ip
+
+          # Copy the latest JSON rule sets from the upstream repository.
+          cp -a .upstream/sing-box/. .
+          rm -rf .upstream
+
+          # Paths are relative to the rule set root.
+          # Add more exact paths or path patterns here as needed.
+          exclude_paths=(
+            "*/cdn.json"
+            "*/download.json"
+            "domainset/game-download.json"
+            "domainset/icloud_private_relay.json"
+            "ip/ai.json"
+            "ip/china_ip.json"
+            "ip/china_ip_ipv6.json"
+            "ip/domestic.json"
+            "ip/download.json"
+            "ip/lan.json"
+            "ip/neteasemusic.json"
+            "ip/reject.json"
+            "ip/stream.json"
+            "ip/stream_biliintl.json"
+            "ip/stream_eu.json"
+            "ip/stream_hk.json"
+            "ip/stream_jp.json"
+            "ip/stream_kr.json"
+            "ip/stream_tw.json"
+            "ip/stream_us.json"
+            "ip/telegram_asn.json"
+            "non_ip/cloudmounter.json"
+            "non_ip/direct.json"
+            "non_ip/domestic.json"
+            "non_ip/gitlab.json"
+            "non_ip/global.json"
+            "non_ip/lan.json"
+            "non_ip/my_*.json"
+            "non_ip/neteasemusic.json"
+            "non_ip/sogouinput.json"
+            "non_ip/stream_biliintl.json"
+          )
+
+          for path_pattern in "${exclude_paths[@]}"; do
+            echo "Excluding paths matching: ${path_pattern}"
+
+            find domainset ip non_ip \
+              -type f \
+              -path "${path_pattern}" \
+              -print \
+              -delete
+          done
+
+      - name: Clean and compile rulesets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          while IFS= read -r -d '' source_file; do
+            temporary_file="${source_file}.tmp"
+            output_file="${source_file%.json}.srs"
+
+            echo "Processing: ${source_file}"
+
+            # Validate the source format before filtering.
+            if ! jq -e '
+              (.version | type == "number")
+              and
+              (.rules | type == "array")
+            ' "${source_file}" >/dev/null; then
+              echo "::error file=${source_file}::Invalid sing-box rule-set source"
+              exit 1
+            fi
+
+            jq '
+              def compact:
+                ascii_downcase
+                | gsub("[._-]"; "");
+
+              # Detect ruleset.skk.moe watermarks and common leetspeak variants.
+              def is_watermark:
+                compact
+                | (
+                    endswith("rulesetskkmoe")
+                    or test(
+                      "^(?:t|7)h(?:i|1)(?:s|5)"
+                      + "ru(?:l|1)(?:e|3)(?:s|5)(?:e|3)t"
+                      + "(?:i|1)(?:s|5)"
+                      + "m(?:a|4)d(?:e|3)"
+                      + "by"
+                      + "(?:s|5)ukk(?:a|4)w"
+                      + "(?:ru(?:l|1)(?:e|3)(?:s|5)(?:e|3)t)?"
+                      + "skkmoe$"
+                    )
+                  );
+
+              # Clean domain-related fields only.
+              def clean_domain_fields:
+                walk(
+                  if type == "object" then
+                    with_entries(
+                      if (
+                        (
+                          .key == "domain"
+                          or .key == "domain_suffix"
+                          or .key == "domain_keyword"
+                          or .key == "domain_regex"
+                        )
+                        and
+                        (.value | type == "array")
+                      ) then
+                        .value |= map(
+                          select(
+                            type != "string"
+                            or
+                            (is_watermark | not)
+                          )
+                        )
+                      else
+                        .
+                      end
+                    )
+                  else
+                    .
+                  end
+                );
+
+              # Recursively remove empty arrays and empty rule objects.
+              def prune:
+                if type == "array" then
+                  map(prune)
+                  | map(
+                      select(
+                        . != null
+                        and . != []
+                        and . != {}
+                      )
+                    )
+                elif type == "object" then
+                  with_entries(.value |= prune)
+                  | with_entries(
+                      select(
+                        .value != null
+                        and .value != []
+                        and .value != {}
+                      )
+                    )
+                  | if (
+                      .type? == "logical"
+                      and
+                      ((.rules? // []) | length == 0)
+                    ) then
+                      {}
+                    else
+                      .
+                    end
+                else
+                  .
+                end;
+
+              .rules |= [
+                .[]
+                | clean_domain_fields
+                | prune
+                | select(. != {})
+              ]
+            ' "${source_file}" > "${temporary_file}"
+
+            # Keep and compile the file only if it still contains valid rules.
+            if jq -e '.rules | length > 0' \
+              "${temporary_file}" >/dev/null; then
+              mv "${temporary_file}" "${source_file}"
+
+              echo "Compiling: ${source_file}"
+
+              sing-box rule-set compile \
+                --output "${output_file}" \
+                "${source_file}"
+            else
+              echo "Removing empty ruleset: ${source_file}"
+
+              rm -f \
+                "${source_file}" \
+                "${temporary_file}"
+            fi
+          done < <(
+            find domainset ip non_ip \
+              -type f \
+              -name "*.json" \
+              -print0
+          )
+
+      - name: Commit and push changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update sing-box rulesets"
+          git push origin HEAD:main
+
+      - name: Delete old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 3
+          keep_minimum_runs: 1
