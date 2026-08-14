@@ -272,7 +272,11 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: update sing-box rulesets"
+          commit_date="$(date -u +%F)"
+
+          git commit \
+            -m "chore: update sing-box rulesets (${commit_date})"
+
           git push origin HEAD:main
 
       - name: Delete old workflow runs
