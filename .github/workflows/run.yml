@@ -74,6 +74,7 @@ jobs:
           exclude_paths=(
             "*/cdn.json"
             "*/download.json"
+            "domainset/reject.json"
             "domainset/reject_extra.json"
             "domainset/reject_phishing.json"
             "domainset/game-download.json"
