@@ -96,6 +96,7 @@ jobs:
             "ip/stream_tw.json"
             "ip/stream_us.json"
             "ip/telegram_asn.json"
+            "ip/teleproto.json"
             "non_ip/cloudmounter.json"
             "non_ip/direct.json"
             "non_ip/domestic.json"
