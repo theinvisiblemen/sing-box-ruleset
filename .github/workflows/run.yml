@@ -84,7 +84,6 @@ jobs:
             "ip/china_ip_ipv6.json"
             "ip/domestic.json"
             "ip/download.json"
-            "ip/lan.json"
             "ip/neteasemusic.json"
             "ip/reject.json"
             "ip/stream.json"
