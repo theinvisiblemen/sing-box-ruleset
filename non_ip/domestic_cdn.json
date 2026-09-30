@@ -3,6 +3,7 @@
   "rules": [
     {
       "domain": [
+        "time.xtracloud.net",
         "registry.npmmirror.com"
       ],
       "domain_suffix": [
