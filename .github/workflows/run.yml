@@ -106,6 +106,9 @@ jobs:
             "non_ip/neteasemusic.json"
             "non_ip/sogouinput.json"
             "non_ip/stream_biliintl.json"
+            "non_ip/reject-no-drop.json"
+            "non_ip/reject-drop.json"
+            "non_ip/reject.json"
           )
 
           for path_pattern in "${exclude_paths[@]}"; do
